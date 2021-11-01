@@ -2,9 +2,6 @@
 // Created by Davide on 29/10/2021.
 //
 
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
 
 #include "utils.h"
 

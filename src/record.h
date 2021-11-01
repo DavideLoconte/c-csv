@@ -22,9 +22,10 @@ typedef struct Record_s {
 
 /**
  * Allocate a record
+ * @param len initial record size
  * @return the record, or NULL on error
  */
-Record *record_alloc();
+Record *record_alloc(size_t len);
 
 /**
  * Free an allocated record

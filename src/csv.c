@@ -5,13 +5,15 @@
 #include <ctype.h>
 #include "../include/csv.h"
 
-#define BUFFER_SIZE 512
+#define BUFFER_SIZE (1024 * 32)
+#define FIELD_BUFFER_SIZE 512
 #define RECORD_SIZE 8
 
 #define HEADER_FOUND 0X01
 #define ESCAPING 0X02
 #define ONE_DQUOTE_FOUND 0X04
 #define TWO_DQUOTES_FOUND 0X08
+#define ENF_OF_FILE 0x10
 
 /**
  * This structure encapsulate some data
@@ -29,7 +31,7 @@
  * @param header A dynamic array of strings which stores the fields
  *               of the CSV header
  *
- * @param flags The first four bits holds some information on the parser state.
+ * @param flags The first five bits holds some information on the parser state.
  *               - HEADER_FOUND: The first record (header) has been processed.
  *               - ESCAPING: The character that the parser is reading is
  *                           enclosed in double quotes and must be escaped
@@ -40,10 +42,13 @@
  *                                    in an escaped sequence. When this happens,
  *                                    the final parsed field will contain a
  *                                    single double quote character.
+ *                - END_OF_FILE: 1 if EOF is encountered
  *              Remaining bits are currently unused.
  *
  * @param currentCsv FILE * pointer of the CSV file to parse
  * @param nextchr The current character
+ * @param tempBuffer Contains the content of the file
+ * @param bufPos store the current position in the buffer
  */
 typedef struct {
         Buffer *buffer;
@@ -52,7 +57,9 @@ typedef struct {
         char flags;
 
         FILE *currentCsv;
-        int nextchr;
+        char nextchr;
+        char *tempBuffer;
+        size_t bufPos;
 } ParsingContext;
 
 // Private prototypes
@@ -117,6 +124,11 @@ void end_escaped_sequence(CsvReader *reader, ParsingContext *pc);
  */
 void escape_quotes(CsvReader *reader, ParsingContext *pc);
 
+char get_next_character(ParsingContext *pc);
+
+void get_next_line(ParsingContext *pc);
+
+
 // Public Implementation
 
 CsvReader *csv_reader_alloc(void (*headerCallback)(void *, Record *),
@@ -140,15 +152,18 @@ void csv_reader_parse(CsvReader *reader, FILE *csvFile)
 {
         ParsingContext pc;
 
-        pc.buffer = buffer_alloc(BUFFER_SIZE);
+        pc.buffer = buffer_alloc(FIELD_BUFFER_SIZE);
         pc.currentRecord = record_alloc(RECORD_SIZE);
         pc.header = NULL;
         pc.flags = 0x00;
         pc.currentCsv = csvFile;
         pc.nextchr = 0;
+        pc.tempBuffer = malloc(sizeof (char ) * (BUFFER_SIZE));
 
-        while (pc.nextchr != EOF) {
-                pc.nextchr = fgetc(csvFile);
+        get_next_line(&pc);
+
+        while (!(pc.flags & ENF_OF_FILE)) {
+                pc.nextchr = get_next_character(&pc);
                 if (pc.flags & ESCAPING) {
                         parse_escaped_data(reader, &pc);
                 } else {
@@ -159,9 +174,27 @@ void csv_reader_parse(CsvReader *reader, FILE *csvFile)
         record_free(pc.currentRecord);
         record_free(pc.header);
         buffer_free(pc.buffer);
+        free(pc.tempBuffer);
 }
 
 // Private
+
+inline char get_next_character(ParsingContext *pc)
+{
+        char next = pc->tempBuffer[pc->bufPos++];
+
+        if (pc->bufPos > BUFFER_SIZE)
+                get_next_line(pc);
+
+        return next;
+}
+
+inline void get_next_line(ParsingContext *pc)
+{
+        pc->bufPos = 0;
+        if (!fgets(pc->tempBuffer, BUFFER_SIZE, pc->currentCsv))
+                pc->flags |= ENF_OF_FILE;
+}
 
 inline int is_normal_character(char c) {
         return (0x20 == c || c == 0x21 || (0x23 <= c && c <= 0x2b) || (0x2d <= c && c <= 0x7e));
@@ -190,6 +223,8 @@ void emit_record(CsvReader *reader, ParsingContext *pc)
                         reader->header(reader->context, pc->header);
                 }
         }
+
+        get_next_line(pc);
 }
 
 void emit_field(CsvReader *reader, ParsingContext *pc)
