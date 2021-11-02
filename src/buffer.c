@@ -67,8 +67,7 @@ char *append_char(Buffer *buf, char c)
         }
 
         buf->buffer[buf->stringLength] = c;
-        buf->buffer[buf->stringLength + 1] = 0;
-        buf->stringLength = buf->stringLength + 1;
+        buf->buffer[++buf->stringLength] = 0;
 
         return buf->buffer;
 }
