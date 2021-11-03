@@ -45,17 +45,6 @@ void record_reset(Record *r);
  * @param field the string
  * @return the underlying array, or NULL on error
  */
-char **record_append_str_by_value(Record *r, const char *field, size_t len);
-
-/**
- * Add a string to the record by reference. This value has to be stored in the heap
- * since it will be automatically freed when record_free is invoked
- * @param r the record
- * @param field a string stored in the heap
- * @return the underlying array, or NULL on error
- */
-char **record_append_str_by_reference(Record *r, char *field);
-
-
+char **record_append_str(Record *r, const char *field, size_t len);
 
 #endif //C_CSV__RECORD_H

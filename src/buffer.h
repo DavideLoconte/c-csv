@@ -12,7 +12,7 @@
 typedef struct Buffer_s {
         char *buffer;
         size_t stringLength;
-        size_t bufferLength;
+        int bufferLength;
 } Buffer;
 
 /**
@@ -34,20 +34,12 @@ void buffer_free(Buffer *buffer);
 void buffer_reset(Buffer *buffer);
 
 /**
- * Append a copy of a string at the end of the buffer
- * @param buffer the buffer
- * @param string the string
- * @return the underlying buffer on success, NULL otherwise
- */
-char *append_str(Buffer *buffer, const char *string, size_t len);
-
-/**
  * Append a character at the end of the buffer
  * @param buffer the buffer
  * @param character the character
  * @return the underlying buffer on success, NULL otherwise
  */
-char *append_char(Buffer *buf, char c);
+char *buffer_append(Buffer *buf, char c);
 
 
 #endif //C_CSV__BUFFER_H

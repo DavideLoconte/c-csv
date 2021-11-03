@@ -12,7 +12,7 @@ Buffer *buffer_alloc(size_t len)
         Buffer *result = malloc(sizeof(Buffer));
 
         if (result == NULL) return NULL;
-        for (result->bufferLength = 2 ; len > 0; len>>=1, result->bufferLength<<=1);
+        for (result->bufferLength = 1 ; result->bufferLength < len; result->bufferLength *= 2);
 
         result->buffer = malloc(sizeof(char) * result->bufferLength);
 
@@ -26,49 +26,24 @@ Buffer *buffer_alloc(size_t len)
         return result;
 }
 
-inline void buffer_free(Buffer *buffer) { free(buffer->buffer); free(buffer); }
+inline void buffer_free(Buffer *buffer) {
+        free(buffer->buffer);
+        free(buffer);
+}
 inline void buffer_reset(Buffer *buffer) { buffer->buffer[0] = 0; buffer->stringLength = 0; }
 
-char *append_str(Buffer *buf, const char *str, size_t len)
-{
-        char should_realloc = 0;
-        size_t newlen = buf->stringLength + len;
-        char *newBuf = NULL;
-
-        for (; buf->bufferLength < newlen + 1; buf->bufferLength <<= 1, should_realloc = 1);
-
-        if (should_realloc) {
-                newBuf = realloc(buf->buffer, buf->bufferLength);
-                if (newBuf == NULL) {
-                        return NULL;
-                }
-                buf->buffer = newBuf;
-        }
-
-        buf->buffer[buf->stringLength] = str[0];
-        while (len != 0) {
-                buf->buffer[len + buf->stringLength] = str[len];
-                len--;
-        }
-
-        buf->stringLength = newlen;
-        return buf->buffer;
-}
-
-char *append_char(Buffer *buf, char c)
+char *buffer_append(Buffer *buf, char c)
 {
         // It should loop once anyway
-        for (; buf->bufferLength < buf->stringLength + 1; buf->bufferLength <<= 1) {
-                char *newBuf = realloc(buf->buffer, buf->bufferLength);
-                if (newBuf == NULL) {
+        for (; buf->bufferLength <= buf->stringLength + 1; buf->bufferLength *= 2) {
+                buf->buffer =  realloc(buf->buffer, buf->bufferLength * sizeof *buf->buffer);
+                if (buf->buffer == NULL)
                         return NULL;
-                }
-                buf->buffer = newBuf;
         }
 
         buf->buffer[buf->stringLength] = c;
-        buf->buffer[++buf->stringLength] = 0;
-
+        buf->stringLength += 1;
+        buf->buffer[buf->stringLength] = 0;
         return buf->buffer;
 }
 

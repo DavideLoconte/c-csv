@@ -5,29 +5,22 @@
 #include <ctype.h>
 #include "../include/csv.h"
 
-#define BUFFER_SIZE (1024 * 32)
-#define FIELD_BUFFER_SIZE 4096
-#define RECORD_SIZE 32
+#define BUFFER_SIZE 512
+#define RECORD_SIZE 16
 
 #define HEADER_FOUND 0X01
-#define ESCAPING 0X02
-#define ONE_DQUOTE_FOUND 0X04
-#define TWO_DQUOTES_FOUND 0X08
-#define END_OF_FILE 0x10
+#define PROCESSED_ALL_RECORDS 0x02
+#define ESCAPING 0x04
+#define DQUOTE_FOUND 0x08
 
 #define DQUOTE 34
 #define NEW_LINE 10
 #define CARRIAGE_RETURN 13
 #define COMMA 44
 
-#define is_normal_character(c) (0x20 == (c) || (c) == 0x21  || \
-                               (0x23 <= (c) && (c) <= 0x2b) || \
-                               (0x2d <= (c) && (c) <= 0x7e))
-
 #define is_line_ending(c) ((c) == NEW_LINE || (c) == EOF)
 #define is_separator(c) ((c) == COMMA)
 #define is_dquote(c) ((c) == DQUOTE)
-#define is_ignorable(c) ((c) == CARRIAGE_RETURN)
 
 /**
  * This structure encapsulate some data
@@ -65,32 +58,20 @@
  * @param bufPos store the current position in the buffer
  */
 typedef struct {
-        Buffer *buffer;
-        Record *currentRecord;
-        Record *header;
-        int flags;
-
         FILE *currentCsv;
-        int nextchr;
-        char *tempBuffer;
-        size_t bufPos;
+        Buffer *buffer;
+        Record *record;
+        Record *header;
+
+        int bufferPosition;
+        int lastSeparator;
+
+        Buffer *secondaryBuffer;
+        int flags;
 } ParsingContext;
 
+
 // Private prototypes
-
-/**
- * Process the next character
- * @param reader The CsvReader
- * @param pc the current parsing context
- */
-void parse_data(CsvReader *reader, ParsingContext *pc);
-
-/**
- * Process the next character assuming it is escaped
- * @param reader the CsvReader
- * @param pc the current parsing context
- */
-void parse_escaped_data(CsvReader *reader, ParsingContext *pc);
 
 /**
  * Execute the callback function for the currently stored record,
@@ -109,38 +90,22 @@ void emit_record(CsvReader *reader, ParsingContext *pc);
 void emit_field(ParsingContext *pc);
 
 /**
- * Start escaping the sequence after the current character
- * @param reader the CsvReader
- * @param pc the current parsing context
- */
-void start_escaped_sequence(ParsingContext *pc);
-
-/**
- * End the escaped sequence on this character and move to the beginning of the
- * next field
- * @param reader the CsvReader
- * @param pc the current parsing context
- */
-void end_escaped_sequence(CsvReader *reader, ParsingContext *pc);
-
-/**
- * Add a double quote (") to the current buffer
- * @param reader the CsvReader
- * @param pc the current parsing context
- */
-void escape_quotes(ParsingContext *pc);
-
-/**
  * Move to the next character
  * @param pc
- * @return
  */
-int get_next_character(ParsingContext *pc);
+void get_next_character(ParsingContext *pc);
 /**
  * Move to the next line
  * @param pc parsing context
  */
 void get_next_line(ParsingContext *pc);
+
+
+void start_escaped_sequence(CsvReader *reader, ParsingContext *pc);
+void end_escaped_sequence(CsvReader *reader, ParsingContext *pc);
+void get_escaped_sequence(CsvReader *reader, ParsingContext *pc);
+char current_char(ParsingContext *pc);
+char lookahead(ParsingContext *pc);
 
 
 // Public Implementation
@@ -150,155 +115,180 @@ CsvReader *csv_reader_alloc(void (*headerCallback)(void *, Record *),
                             void *context)
 {
         CsvReader *result = malloc(sizeof(CsvReader));
-
-        if (result == NULL) return NULL;
-
+        if (result == NULL)
+                return NULL;
         result->context = context;
         result->header = headerCallback;
         result->record = recordCallback;
-
         return result;
 }
 
-inline void csv_reader_free(CsvReader *reader) {free(reader);}
+inline void csv_reader_free(CsvReader *reader) {
+        free(reader);
+}
 
 void csv_reader_parse(CsvReader *reader, FILE *csvFile)
 {
         ParsingContext pc;
 
-        pc.buffer = buffer_alloc(FIELD_BUFFER_SIZE);
-        pc.currentRecord = record_alloc(RECORD_SIZE);
+        pc.currentCsv = csvFile;
+
+        pc.buffer = buffer_alloc(BUFFER_SIZE);
+        pc.record = record_alloc(RECORD_SIZE);
+        pc.bufferPosition = 0;
+        pc.secondaryBuffer = NULL;
         pc.header = NULL;
         pc.flags = 0x00;
-        pc.currentCsv = csvFile;
-        pc.nextchr = 0;
-        pc.tempBuffer = calloc(sizeof (char), (BUFFER_SIZE));
-        pc.bufPos = 0;
 
-        while (!(pc.flags & END_OF_FILE)) {
-                pc.nextchr = get_next_character(&pc);
+        get_next_line(&pc);
 
-                if (!(pc.flags & (ESCAPING | END_OF_FILE)))
-                        parse_data(reader, &pc);
-                else if (!(pc.flags & END_OF_FILE))
-                        parse_escaped_data(reader, &pc);
-                else
+        do {
+                if (is_separator(pc.buffer->buffer[pc.bufferPosition])) {
+                        emit_field(&pc);
+                        pc.lastSeparator = pc.bufferPosition + 1;
+                } else if (is_line_ending(pc.buffer->buffer[pc.bufferPosition])) {
+                        emit_field(&pc);
                         emit_record(reader, &pc);
+                } else if (is_dquote(pc.buffer->buffer[pc.bufferPosition])) {
+                        start_escaped_sequence(reader, &pc);
+                        continue;
+                }
+
+                get_next_character(&pc);
+        } while (!(pc.flags & PROCESSED_ALL_RECORDS));
+
+        buffer_free(pc.buffer);
+        record_free(pc.record);
+
+        if (pc.flags & HEADER_FOUND) {
+                record_free(pc.header);
         }
 
-        record_free(pc.currentRecord);
-        record_free(pc.header);
-        buffer_free(pc.buffer);
-        free(pc.tempBuffer);
+        if (pc.secondaryBuffer != NULL) {
+                buffer_free(pc.secondaryBuffer);
+        }
 }
 
-// Private
-
-inline int get_next_character(ParsingContext *pc)
+void get_next_character(ParsingContext *pc)
 {
-        if (!(pc->bufPos >= BUFFER_SIZE || pc->tempBuffer[pc->bufPos+1] == 0)) {
-                return (int) pc->tempBuffer[++pc->bufPos];
-        } else {
-                get_next_line(pc);
-                return (int) pc->tempBuffer[0];
+        pc->bufferPosition+=1;
+
+        if (pc->bufferPosition >= pc->buffer->bufferLength) {
+                pc->buffer->bufferLength *= 2;
+                pc->buffer->buffer = realloc(pc->buffer->buffer, sizeof(char) * pc->buffer->bufferLength);
+
+                if (!pc->buffer->buffer) {
+                        perror("Cannot alloc memory buffer for csv parsing");
+                        abort();
+                }
+
+                if(!fgets(pc->buffer->buffer + pc->bufferPosition - 1,
+                          pc->buffer->bufferLength - (pc->bufferPosition - 1),
+                          pc->currentCsv)) {
+                        fprintf(stderr, "Error reading additional data from CSV\n");
+                }
         }
 }
 
 inline void get_next_line(ParsingContext *pc)
 {
-        pc->bufPos = 0;
-        if (!fgets(pc->tempBuffer, BUFFER_SIZE, pc->currentCsv))
-                pc->flags |= END_OF_FILE;
+        pc->bufferPosition = 0;
+        pc->lastSeparator = 0;
+
+        if (!fgets(pc->buffer->buffer, pc->buffer->bufferLength, pc->currentCsv)) {
+                if (feof(pc->currentCsv)) {
+                        pc->flags |= PROCESSED_ALL_RECORDS;
+                } else {
+                        perror("Error while reading input CSV");
+                        abort();
+                }
+        }
 }
 
 
 void emit_record(CsvReader *reader, ParsingContext *pc)
 {
-        record_append_str_by_value(pc->currentRecord,
-                                   pc->buffer->buffer,
-                                   pc->buffer->stringLength);
-        buffer_reset(pc->buffer);
-
         if (pc->flags & HEADER_FOUND) {
-
-                if (reader->record)
-                        reader->record(reader->context,
-                                       pc->header,
-                                       pc->currentRecord);
-
-                record_reset(pc->currentRecord);
-
+                if (reader->record != NULL)
+                        reader->record(reader->context, pc->header, pc->record);
+                record_reset(pc->record);
         } else {
+                if (reader->header != NULL)
+                        reader->header(reader->context, pc->record);
                 pc->flags |= HEADER_FOUND;
-                pc->header = pc->currentRecord;
-                pc->currentRecord = record_alloc(pc->header->arraySize);
-
-                if (reader->header)
-                        reader->header(reader->context, pc->header);
+                pc->header = pc->record;
+                pc->record = record_alloc(pc->header->arraySize);
         }
 
-        pc->flags &= ~ONE_DQUOTE_FOUND;
+        get_next_line(pc);
 }
 
 void emit_field(ParsingContext *pc)
 {
-        record_append_str_by_value(pc->currentRecord,
-                                   pc->buffer->buffer,
-                                   pc->buffer->stringLength);
-        buffer_reset(pc->buffer);
+        char *string = pc->buffer->buffer + pc->lastSeparator;
+        char stringTermination = string[pc->bufferPosition - pc->lastSeparator];
+        string[pc->bufferPosition - pc->lastSeparator] = 0;
+        record_append_str(pc->record, string, pc->bufferPosition - pc->lastSeparator);
+        string[pc->bufferPosition - pc->lastSeparator] = stringTermination;
 }
 
-void start_escaped_sequence(ParsingContext *pc)
+void start_escaped_sequence(CsvReader *reader, ParsingContext *pc)
 {
-        pc->flags |= ESCAPING;
-        pc->flags &= ~(ONE_DQUOTE_FOUND | TWO_DQUOTES_FOUND);
-        buffer_reset(pc->buffer);
-}
-
-void parse_data(CsvReader *reader, ParsingContext *pc)
-{
-        if (is_normal_character(pc->nextchr))
-                append_char(pc->buffer, (char) pc->nextchr);
-
-        else if (is_separator(pc->nextchr))
-                emit_field(pc);
-
-        else if (is_line_ending(pc->nextchr))
-                emit_record(reader, pc);
-
-        else if (is_dquote(pc->nextchr))
-                start_escaped_sequence(pc);
-}
-
-void parse_escaped_data(CsvReader *reader, ParsingContext *pc)
-{
-        if (!is_dquote(pc->nextchr)) {
-                if (!(pc->flags & ONE_DQUOTE_FOUND))
-                        append_char(pc->buffer, (char) pc->nextchr);
-                else
-                        end_escaped_sequence(reader, pc);
+        if (pc->secondaryBuffer == NULL) {
+                pc->secondaryBuffer = buffer_alloc(BUFFER_SIZE);
         }
-        else {
-                if (!(pc->flags & ONE_DQUOTE_FOUND))
-                        pc->flags |= ONE_DQUOTE_FOUND;
-                else
-                        escape_quotes(pc);
+        pc->flags |= ESCAPING;
+        get_next_character(pc);
+        get_escaped_sequence(reader, pc);
+}
+
+void get_escaped_sequence(CsvReader *reader, ParsingContext *pc)
+{
+        while(pc->flags & ESCAPING) {
+                if (current_char(pc) == 0) {
+                        get_next_line(pc);
+                }
+
+                if (!is_dquote(current_char(pc))) {
+                        buffer_append(pc->secondaryBuffer, pc->buffer->buffer[pc->bufferPosition]);
+                } else if (is_dquote(current_char(pc)) && !is_dquote(lookahead((pc)))) {
+                        end_escaped_sequence(reader, pc);
+                        break;
+                } else if (is_dquote(current_char(pc)) && is_dquote(lookahead((pc)))) {
+                        buffer_append(pc->secondaryBuffer, pc->buffer->buffer[pc->bufferPosition]);
+                        get_next_character(pc);
+                }
+
+                get_next_character(pc);
         }
 }
 
 void end_escaped_sequence(CsvReader *reader, ParsingContext *pc)
 {
-        while (!(is_separator(pc->nextchr) || is_line_ending(pc->nextchr)))
-                pc->nextchr = get_next_character(pc);
+        record_append_str(pc->record, pc->secondaryBuffer->buffer, pc->secondaryBuffer->stringLength);
+        buffer_reset(pc->secondaryBuffer);
+        pc->flags &= ~ESCAPING;
 
-        pc->flags &= ~(ONE_DQUOTE_FOUND | ESCAPING);
-        emit_record(reader, pc);
+        do {
+                if (is_separator(current_char(pc))) {
+                        pc->lastSeparator = pc->bufferPosition + 1;
+                        get_next_character(pc);
+                } else if (is_line_ending(pc->buffer->buffer[pc->bufferPosition])) {
+                        emit_record(reader, pc);
+                } else {
+                        get_next_character(pc);
+                        continue;
+                }
+                break;
+        } while (1);
 }
 
-inline void escape_quotes(ParsingContext *pc)
+inline char current_char(ParsingContext *pc)
 {
-        pc->flags &= ~ONE_DQUOTE_FOUND;
-        append_char(pc->buffer, '"');
+        return pc->buffer->buffer[pc->bufferPosition];
 }
 
-
+inline char lookahead(ParsingContext *pc)
+{
+        return pc->buffer->buffer[pc->bufferPosition + 1];
+}
