@@ -5,8 +5,8 @@
 #include <ctype.h>
 #include "../include/csv.h"
 
-#define BUFFER_SIZE 512
-#define RECORD_SIZE 16
+#define BUFFER_SIZE 2
+#define RECORD_SIZE 2
 
 #define HEADER_FOUND 0X01
 #define PROCESSED_ALL_RECORDS 0x02
@@ -19,6 +19,7 @@
 #define COMMA 44
 
 #define is_line_ending(c) ((c) == NEW_LINE || (c) == EOF)
+#define is_carriage_return(c) ((c) == CARRIAGE_RETURN)
 #define is_separator(c) ((c) == COMMA)
 #define is_dquote(c) ((c) == DQUOTE)
 
@@ -146,9 +147,12 @@ void csv_reader_parse(CsvReader *reader, FILE *csvFile)
                 if (is_separator(pc.buffer->buffer[pc.bufferPosition])) {
                         emit_field(&pc);
                         pc.lastSeparator = pc.bufferPosition + 1;
-                } else if (is_line_ending(pc.buffer->buffer[pc.bufferPosition])) {
+                } else if (is_line_ending(pc.buffer->buffer[pc.bufferPosition]) || \
+                          (is_carriage_return(pc.buffer->buffer[pc.bufferPosition]) && is_line_ending(pc.buffer->buffer[pc.bufferPosition+1])) \
+                          ) {
                         emit_field(&pc);
                         emit_record(reader, &pc);
+                        continue;
                 } else if (is_dquote(pc.buffer->buffer[pc.bufferPosition])) {
                         start_escaped_sequence(reader, &pc);
                         continue;
@@ -173,7 +177,7 @@ void get_next_character(ParsingContext *pc)
 {
         pc->bufferPosition+=1;
 
-        if (pc->bufferPosition >= pc->buffer->bufferLength) {
+        if (pc->bufferPosition >= (pc->buffer->bufferLength - 1)) {
                 pc->buffer->bufferLength *= 2;
                 pc->buffer->buffer = realloc(pc->buffer->buffer, sizeof(char) * pc->buffer->bufferLength);
 
@@ -182,8 +186,8 @@ void get_next_character(ParsingContext *pc)
                         abort();
                 }
 
-                if(!fgets(pc->buffer->buffer + pc->bufferPosition - 1,
-                          pc->buffer->bufferLength - (pc->bufferPosition - 1),
+                if(!fgets(pc->buffer->buffer + pc->bufferPosition,
+                          pc->buffer->bufferLength - pc->bufferPosition,
                           pc->currentCsv)) {
                         fprintf(stderr, "Error reading additional data from CSV\n");
                 }

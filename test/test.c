@@ -16,10 +16,10 @@ void headerCallback(void *ctx, Record *header)
 {
         fields += header->arraySize;
         records += 1;
-//        printf("Record [%lu]:\n", header->arraySize);
-//        for (int i = 0; i < header->arraySize; i++) {
-//                printf("\t%d: %s\n", i, header->fields[i]);
-//        }
+        printf("Record [%lu]:\n", header->arraySize);
+        for (int i = 0; i < header->arraySize; i++) {
+                printf("\t%d: %s\n", i, header->fields[i]);
+        }
 }
 
 void recordCallback(void *ctx, Record *header, Record *record) { headerCallback(ctx, record); }
@@ -28,7 +28,7 @@ int main()
 {
         size_t i;
         double sum = 0.0;
-        int iterations = 4096;
+        int iterations = 1;
         for (i = 0; i < iterations; i++) {
                 struct timeval start, end;
                 gettimeofday(&start, NULL);
